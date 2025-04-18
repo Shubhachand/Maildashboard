@@ -5,6 +5,8 @@ namespace App\Services;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Mail\Message;
+use App\Models\Email;
+use Carbon\Carbon;
 
 class EmailService
 {
@@ -28,14 +30,6 @@ class EmailService
                 'to' => $to,
                 'subject' => $subject
             ]);
-            
-            // Try sending a simple test email first
-            Mail::send('emails.debug-test', [], function(Message $message) use ($to) {
-                $message->to($to)
-                       ->subject('Test Email');
-            });
-            
-            Log::info('Test email sent successfully');
             
             // Now try the actual email
             Mail::send([], [], function(Message $message) use ($from, $to, $cc, $bcc, $subject, $body) {
@@ -70,14 +64,71 @@ class EmailService
     }
 
     /**
-     * Fetch emails from the user's mail server.
+     * Pull new messages from the user’s Gmail inbox via IMAP.
      *
      * @param int $userId
-     * @return array
+     * @return void
      */
-    public function fetchEmails($userId)
+    public function fetchEmails(int $userId)
     {
-        // Implementation for fetching emails from IMAP server
-        return [];
+        // Build the IMAP mailbox string
+        $mailbox = sprintf(
+            '{%s:%d/imap/%s}INBOX',
+            config('mail.imap.host'),
+            config('mail.imap.port'),
+            config('mail.imap.encryption')
+        );
+
+        // Open IMAP connection
+        $inbox = @imap_open($mailbox, config('mail.username'), config('mail.password'));
+
+        if (!$inbox) {
+            Log::error('IMAP connect failed: ' . imap_last_error());
+            return;
+        }
+
+        // Search for unseen messages
+        $messages = imap_search($inbox, 'UNSEEN');
+        if (!empty($messages)) {
+            foreach ($messages as $msgNum) {
+                $header = imap_headerinfo($inbox, $msgNum);
+                $body = imap_fetchbody($inbox, $msgNum, 1.1) 
+                      ?: imap_fetchbody($inbox, $msgNum, 1);
+
+                Email::create([
+                    'user_id'     => $userId,
+                    'folder_id'   => $this->getOrCreateFolder($userId, 'inbox'),
+                    'from'        => $header->fromaddress,
+                    'to'          => $header->toaddress,
+                    'cc'          => $header->ccaddress ?? '',
+                    'bcc'         => $header->bccaddress ?? '',
+                    'subject'     => $header->subject,
+                    'body'        => $body,
+                    'is_read'     => false,
+                    'received_at' => Carbon::parse($header->date),
+                ]);
+
+                // Mark as seen so we don't fetch it again
+                imap_setflag_full($inbox, $msgNum, "\\Seen");
+            }
+        }
+
+        imap_close($inbox);
+    }
+    
+    /**
+     * Helper to retrieve or create a folder of the given type for a user.
+     *
+     * @param int $userId
+     * @param string $type
+     * @return int
+     */
+    protected function getOrCreateFolder(int $userId, string $type): int
+    {
+        $folder = \App\Models\Folder::firstOrCreate(
+            ['user_id' => $userId, 'type' => $type],
+            ['name' => ucfirst($type), 'sort_order' => 0]
+        );
+        return $folder->id;
     }
 }
