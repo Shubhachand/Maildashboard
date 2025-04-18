@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
-use App\Models\Setting;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Mail\Message;
 
 class EmailService
 {
@@ -22,9 +22,30 @@ class EmailService
     public function sendEmail($from, $to, $cc, $bcc, $subject, $body)
     {
         try {
-            Mail::send([], [], function ($message) use ($from, $to, $cc, $bcc, $subject, $body) {
-                $message->from($from)
-                        ->to($to);
+            // Log the attempt
+            Log::info('Attempting to send email', [
+                'from' => $from,
+                'to' => $to,
+                'subject' => $subject
+            ]);
+            
+            // Try sending a simple test email first
+            Mail::send('emails.debug-test', [], function(Message $message) use ($to) {
+                $message->to($to)
+                       ->subject('Test Email');
+            });
+            
+            Log::info('Test email sent successfully');
+            
+            // Now try the actual email
+            Mail::send([], [], function(Message $message) use ($from, $to, $cc, $bcc, $subject, $body) {
+                $message->to($to)
+                       ->subject($subject);
+                
+                // Set the from address if different from the default
+                if ($from != config('mail.from.address')) {
+                    $message->from($from, config('mail.from.name'));
+                }
                 
                 if (!empty($cc)) {
                     $message->cc($cc);
@@ -34,13 +55,16 @@ class EmailService
                     $message->bcc($bcc);
                 }
                 
-                $message->subject($subject)
-                        ->setBody($body, 'text/html');
+                // Set HTML content
+                $message->html($body);
             });
+            
+            Log::info('Email sent successfully');
             
             return true;
         } catch (\Exception $e) {
-            Log::error('Failed to send email: ' . $e->getMessage());
+            Log::error('Email sending error: ' . $e->getMessage());
+            Log::error('Error details: ' . $e->getTraceAsString());
             return false;
         }
     }
@@ -54,7 +78,6 @@ class EmailService
     public function fetchEmails($userId)
     {
         // Implementation for fetching emails from IMAP server
-        // This is a placeholder for actual implementation
         return [];
     }
 }
